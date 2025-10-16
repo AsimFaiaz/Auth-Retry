@@ -20,6 +20,8 @@
     and simplify authentication logic in .NET applications.
   </p>
 
+  <p><em>Latest version:</em> <strong>v2</strong> -- safer and more deterministic under concurrent load.</p>
+
   <h2>Developer Note</h2>
   <p>
     This project is part of a broader cleanup of my personal playground -- where I’m 
@@ -55,7 +57,7 @@
 
   <h2>Example Usage</h2>
   <pre>
-  // 1️⃣ Implement your token provider
+  // Implement your token provider
   public sealed class MyTokenProvider : IAccessTokenProvider
   {
       private string? _token;
@@ -76,12 +78,12 @@
       }
   }
 
-  // 2️⃣ Wire the handler to HttpClient
+  // Wire the handler to HttpClient
   var http = new HttpClient(
       new AuthRetryHandler(new MyTokenProvider(), new AuthRetryOptions())
   );
 
-  // 3️⃣ Use it normally
+  // Use it normally
   var res = await http.GetAsync("https://api.example.com/data");
   Console.WriteLine((int)res.StatusCode);
   </pre>
@@ -120,6 +122,71 @@
       OnError = msg => Console.WriteLine("[ERROR] " + msg)
   };
   </pre>
+
+  <h2>Versions</h2>
+
+<p>
+  This repository provides two variants of the handler:
+</p>
+
+<ul>
+  <li>
+    <strong>v1 -- <code>AuthRetryHandler.cs</code></strong><br>
+    The original single-file handler: attaches tokens, single-flights refresh, and <em>replays once</em> on 401.
+  </li>
+  <li>
+    <strong>v2 -- <code>AuthRetryHandlerV2.cs</code></strong> <em>(recommended)</em><br>
+    Same behavior as v1, plus a <strong>retry-once guard</strong> using a replay marker header 
+    (<code>X-AuthRetry-Retried</code>) to guarantee “retry once” even across complex handler chains or proxies.
+  </li>
+</ul>
+
+<h3>Which should I use?</h3>
+<ul>
+  <li><strong>Use v2</strong> for most apps -- it’s safer and more deterministic under load.</li>
+  <li><strong>Use v1</strong> only if you cannot add a custom header to replayed requests (very rare).</li>
+</ul>
+
+<h3>Migration (v1 → v2)</h3>
+<p>
+  No API changes. Replace the file with <code>AuthRetryHandlerV2.cs</code> and recompile.
+  Internally, v2 adds:
+</p>
+
+<ul>
+  <li>A header <code>X-AuthRetry-Retried</code> set on the replayed request.</li>
+  <li>A check that prevents any second retry if that header is present.</li>
+  <li>Clearer diagnostics when no token is available after refresh.</li>
+</ul>
+
+<h3>Compatibility Notes</h3>
+<ul>
+  <li>Both versions support <strong>.NET 6/7/8+</strong>.</li>
+  <li>Request content is buffered for safe replay; large bodies may impact memory.</li>
+  <li>For .NET 8+, request <code>Options</code> are preserved during cloning (conditional compilation).</li>
+</ul>
+
+<h3>Usage (same for v1 and v2)</h3>
+<pre>
+// Choose one file:
+//   - AuthRetryHandler.cs           (v1)
+//   - AuthRetryHandlerV2.cs        (v2, recommended)
+//
+// Wire it up:
+var http = new HttpClient(
+    new AuthRetryHandler(new MyTokenProvider(), new AuthRetryOptions())
+);
+
+// Make calls as usual:
+var res = await http.GetAsync("https://api.example.com/data");
+</pre>
+
+<h3>Tip: Pair with a proactive refresher</h3>
+<p>
+  For best results, combine this handler with a proactive token cache (e.g., <code>TokenRefresher</code>) 
+  to refresh <em>before</em> expiry and let the handler catch only rare 401 edge cases.
+</p>
+
 
   <h2>Why AuthRetryHandler?</h2>
   <p>
