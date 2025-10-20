@@ -19,11 +19,16 @@ namespace Demo.AuthRetry
     // Minimal token info used by the handler - Modify your way
     public readonly struct AccessToken
     {
-        public string Value { get; }
+        public string? Value { get; }
         public DateTimeOffset ExpiresAtUtc { get; }
         public bool IsExpired(DateTimeOffset? now = null, TimeSpan? skew = null)
             => (now ?? DateTimeOffset.UtcNow) >= (ExpiresAtUtc - (skew ?? TimeSpan.FromSeconds(60)));
-        public AccessToken(string value, DateTimeOffset expiresAtUtc) { Value = value; ExpiresAtUtc = expiresAtUtc; }
+
+        public AccessToken(string value, DateTimeOffset expiresAtUtc)
+        {
+            Value = value ?? throw new ArgumentNullException(nameof(value));
+            ExpiresAtUtc = expiresAtUtc;
+        }
     }
 
     // Provider abstraction so any token source can plug in
@@ -39,9 +44,9 @@ namespace Demo.AuthRetry
         public string Scheme { get; init; } = "Bearer";
         public TimeSpan ExpirySkew { get; init; } = TimeSpan.FromSeconds(60);
         public bool RetryOnceOn401 { get; init; } = true;
-        public Action<string>? OnInfo { get; init; } = null;
-        public Action<string>? OnWarn { get; init; } = null;
-        public Action<string>? OnError { get; init; } = null;
+        public Action<string>? OnInfo { get; init; }
+        public Action<string>? OnWarn { get; init; }
+        public Action<string>? OnError { get; init; }
     }
 
     /* ==================================================================
@@ -61,7 +66,10 @@ namespace Demo.AuthRetry
         private readonly SemaphoreSlim _refreshLock = new(1, 1);
         private Task<AccessToken?>? _inflightRefresh; // single-flight
 
-        public AuthRetryHandler(IAccessTokenProvider provider, AuthRetryOptions? options = null, HttpMessageHandler? inner = null)
+        public AuthRetryHandler(
+            IAccessTokenProvider provider,
+            AuthRetryOptions? options = null,
+            HttpMessageHandler? inner = null)
             : base(inner ?? new HttpClientHandler())
         {
             _provider = provider ?? throw new ArgumentNullException(nameof(provider));
@@ -70,7 +78,7 @@ namespace Demo.AuthRetry
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
-            // Get or refresh token proactively
+            // Get or refresh token (Retry)
             var tok = await GetOrRefreshIfNeededAsync(ct).ConfigureAwait(false);
             if (tok is null || string.IsNullOrWhiteSpace(tok.Value))
             {
@@ -161,13 +169,17 @@ namespace Demo.AuthRetry
             if (response.StatusCode != HttpStatusCode.Unauthorized) return false;
 
             // Only retry if we actually sent a token (avoid looping on anonymous endpoints)
-            if (tokenUsed is not { } t || string.IsNullOrWhiteSpace(t.Value)) return false;
+            if (tokenUsed is not null && !string.IsNullOrWhiteSpace(tokenUsed.Value))
+            {
+                // If this request (or a previous handler) already retried - don't loop
+                var req = response.RequestMessage;
+                if (req is not null && req.Headers.Contains(RetriedHeaderName))
+                    return false;
 
-            // If this request (or a previous handler) already retried - don't loop
-            var req = response.RequestMessage;
-            if (req is not null && req.Headers.Contains(RetriedHeaderName)) return false;
+                return true;
+            }
 
-            return true;
+            return false;
         }
 
         private void AttachToken(HttpRequestMessage req, string token)
@@ -205,3 +217,4 @@ namespace Demo.AuthRetry
         }
     }
 }
+
