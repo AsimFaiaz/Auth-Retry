@@ -3,6 +3,7 @@
 // prevents token races (single-flight), clones and replays the original request.
 // Author: Asim Faiaz 
 // License: MIT
+// #nullable enable
 
 using System;
 using System.Linq;
@@ -18,11 +19,16 @@ namespace Demo.AuthRetry
     // Minimal token info used by the handler - Modify your way 
     public readonly struct AccessToken
     {
-        public string Value { get; }
+       public string? Value { get; }
         public DateTimeOffset ExpiresAtUtc { get; }
         public bool IsExpired(DateTimeOffset? now = null, TimeSpan? skew = null)
             => (now ?? DateTimeOffset.UtcNow) >= (ExpiresAtUtc - (skew ?? TimeSpan.FromSeconds(60)));
-        public AccessToken(string value, DateTimeOffset expiresAtUtc) { Value = value; ExpiresAtUtc = expiresAtUtc; }
+
+        public AccessToken(string value, DateTimeOffset expiresAtUtc)
+        {
+            Value = value ?? throw new ArgumentNullException(nameof(value));
+            ExpiresAtUtc = expiresAtUtc;
+        }
     }
 
     //Provider abstraction so any token source can plug in
@@ -38,9 +44,9 @@ namespace Demo.AuthRetry
         public string Scheme { get; init; } = "Bearer";
         public TimeSpan ExpirySkew { get; init; } = TimeSpan.FromSeconds(60);
         public bool RetryOnceOn401 { get; init; } = true;
-        public Action<string>? OnInfo { get; init; } = null;
-        public Action<string>? OnWarn { get; init; } = null;
-        public Action<string>? OnError { get; init; } = null;
+        public Action<string>? OnInfo { get; init; }
+        public Action<string>? OnWarn { get; init; }
+        public Action<string>? OnError { get; init; }
     }
 
     /* ==================================================================
@@ -54,7 +60,10 @@ namespace Demo.AuthRetry
         private readonly SemaphoreSlim _refreshLock = new(1, 1);
         private Task<AccessToken?>? _inflightRefresh; // single-flight
 
-        public AuthRetryHandler(IAccessTokenProvider provider, AuthRetryOptions? options = null, HttpMessageHandler? inner = null)
+        public AuthRetryHandler(
+            IAccessTokenProvider provider,
+            AuthRetryOptions? options = null,
+            HttpMessageHandler? inner = null)
             : base(inner ?? new HttpClientHandler())
         {
             _provider = provider ?? throw new ArgumentNullException(nameof(provider));
@@ -147,7 +156,7 @@ namespace Demo.AuthRetry
             if (response.StatusCode != HttpStatusCode.Unauthorized) return false;
 
             // Only retry if we actually sent a token (avoid looping on anonymous endpoints)
-            return tokenUsed is { } && !string.IsNullOrWhiteSpace(tokenUsed.Value.Value);
+            return tokenUsed is not null && !string.IsNullOrWhiteSpace(tokenUsed.Value);
         }
 
         private void AttachToken(HttpRequestMessage req, string token)
