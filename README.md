@@ -223,6 +223,102 @@ var res = await http.GetAsync("https://api.example.com/data");
     Cleaner, more resilient, and completely reusable across APIs and applications.
   </p>
 
+  <h2>Manual Testing - .NET Fiddle (Version 2 only)</h2>
+  <pre>
+//To Test in .NET Fiddle simply paste this code under the main CS code
+public static class Program
+{
+    public static async Task Main()
+    {
+        Console.WriteLine("AuthRetryHandler V2");
+
+        var options = new AuthRetryOptions
+        {
+            OnInfo = msg => Console.WriteLine("[INFO] " + msg),
+            OnWarn = msg => Console.WriteLine("[WARN] " + msg),
+            OnError = msg => Console.WriteLine("[ERROR] " + msg)
+        };
+
+        var handler = new AuthRetryHandler(new DemoTokenProvider(), options, new FakeApiHandler());
+        var http = new HttpClient(handler);
+
+        for (int i = 1; i <= 3; i++)
+        {
+            Console.WriteLine($"Request {i}");
+            var res = await http.GetAsync("https://fake.api/test");
+            Console.WriteLine($"Response: {(int)res.StatusCode} {res.StatusCode}");
+            await Task.Delay(500);
+        }
+    }
+
+    private sealed class FakeApiHandler : HttpMessageHandler
+    {
+        private string? _lastToken;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
+        {
+            var token = req.Headers.Authorization?.Parameter;
+            Console.WriteLine($"[Server] Token: {token?.Substring(0, 6)}");
+
+            if (_lastToken != token)
+            {
+                _lastToken = token;
+                Console.WriteLine("[Server] → Simulating 401 Unauthorized");
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
+            }
+
+            Console.WriteLine("[Server] → Success!");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        }
+    }
+
+    private sealed class DemoTokenProvider : IAccessTokenProvider
+    {
+        private string _token = "";
+        private DateTimeOffset _expiry = DateTimeOffset.MinValue;
+
+        public Task<AccessToken?> GetAsync(CancellationToken ct)
+        {
+            if (_expiry > DateTimeOffset.UtcNow.AddSeconds(5))
+                return Task.FromResult<AccessToken?>(new AccessToken(_token, _expiry));
+            return Task.FromResult<AccessToken?>(null);
+        }
+
+        public async Task<AccessToken?> ForceRefreshAsync(CancellationToken ct)
+        {
+            Console.WriteLine("[Provider] Refreshing token...");
+            await Task.Delay(300, ct);
+            _token = Guid.NewGuid().ToString("N");
+            _expiry = DateTimeOffset.UtcNow.AddMinutes(1);
+            Console.WriteLine($"[Provider] New token: {_token[..6]}...");
+            return new AccessToken(_token, _expiry);
+        }
+    }
+}
+
+// Before doing these small changes to code: Changes are for .NET fiddle only
+<pre>
+  - if (tok is null || string.IsNullOrWhiteSpace(tok.Value))
+  + if (tok is null || string.IsNullOrWhiteSpace(tok.Value.Value))
+</pre>
+
+<pre>
+  - var tokenValue = tok.Value;
+  + var tokenValue = tok.Value.Value;
+</pre>
+
+<pre>
+  - if (refreshed is null || string.IsNullOrWhiteSpace(refreshed.Value))
+  + if (refreshed is null || string.IsNullOrWhiteSpace(refreshed.Value.Value))
+</pre>
+
+<pre>
+  - var newTokenValue = refreshed.Value;
+  + var newTokenValue = refreshed.Value.Value;
+</pre>
+
+  </pre>
+
+
   <section id="tech-stack">
     <h2>Tech Stack</h2>
     <pre>☑ C# (.NET 8 or newer)</pre>
